@@ -6,6 +6,7 @@ $osmid = -147441;
 
 define('BASE_URL', 'https://print.get-map.org/apis/v1/');
 define('OVERPASS_URL', 'http://overpass-api.de/api/interpreter');
+define('WAYMARKED_GPX_URL', 'https://hiking.waymarkedtrails.org/api/v1/details/relation/%s/geometry/gpx');
 
 # === config ends here ===
 
@@ -200,7 +201,7 @@ function get_routes_for_query($query) {
         $routes[$name] = [
             'id'      => $element->id,
             'name'    => $name,
-            'gpx_url' => sprintf("https://hiking.waymarkedtrails.org/api/details/relation/%s/gpx", $element->id)
+            'gpx_url' => sprintf(WAYMARKED_GPX_URL, $element->id)
         ];
     }
 
