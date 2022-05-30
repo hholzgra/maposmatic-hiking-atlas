@@ -4,12 +4,19 @@ require_once 'HTTP/Request2.php';
 $city = "Enger";
 $osmid = -147441;
 
-define('BASE_URL', 'https://print.get-map.org/apis/v1/');
-define('OVERPASS_URL', 'http://overpass-api.de/api/interpreter');
-define('WAYMARKED_GPX_URL', 'https://hiking.waymarkedtrails.org/api/v1/details/relation/%s/geometry/gpx');
+define('MAPOSMATIC_SERVER', 'http://localhost:8000/');
+define('OVERPASS_SERVER',   'http://overpass-api.de/');
+define('WAYMARKED_SERVER',  'https://hiking.waymarkedtrails.org/');
+
+setlocale(LC_ALL, 'de_DE.UTF-8');
 
 # === config ends here ===
 
+
+
+define('BASE_URL',          MAPOSMATIC_SERVER . 'apis/v1/');
+define('OVERPASS_URL',      OVERPASS_SERVER   . '/api/interpreter');
+define('WAYMARKED_GPX_URL', WAYMARKED_SERVER  . '/api/v1/details/relation/%s/geometry/gpx');
 
 $query = '[out:json];area[name="'.$city.'"];relation(area)["route"="hiking"];out;';
 
@@ -23,30 +30,41 @@ $routes_count = count($routes);
 
 $tmpdir = tempdir();
 
-setlocale(LC_ALL, 'de_DE.UTF-8');
-
 uksort($routes, "strcoll");
 
-$pdflist = "";
+$requests = [];
 
-$pdf = get_city_pdf($osmid, $city);
-$pdf_base = basename($pdf);
-copy($pdf, "$tmpdir/$pdf_base");
-$pdflist .= " $tmpdir/$pdf_base";
+$id = request_city($osmid, $city);
+$requests[] = $id;
 
 $routes_processed = 0;
 foreach ($routes as $key => $route) {
     $routes_processed++;
-    printf("Route %d/%d: %s ", $routes_processed, $routes_count, $route['name']);
-    $pdf = get_route_pdf($route);
-    $routes[$key]['pdf_url'] = $pdf;
-    $pdf_base = basename($pdf);
-    $routes[$key]['pdf_file'] = "$tmpdir/$pdf_base";
-
-    copy($pdf, "$tmpdir/$pdf_base");
-    $pdflist .= " $tmpdir/$pdf_base";
+    printf("Requesting route %d/%d: %s\n", $routes_processed, $routes_count, $route['name']);
+    $id = request_route($route);
+    $requests[] = $id;
 }
 
+$pdflist = "";
+
+while (count($requests)) {
+    echo "... waiting for ".count($requests)." requests to complete   \n";
+    foreach($requests as $key => $id) {
+        $pdf = check_for_pdf($id);
+        if ($pdf) {
+            unset($requests[$key]);
+
+            $pdf_base = basename($pdf);
+            copy($pdf, "$tmpdir/$pdf_base");
+            $pdflist .= " $tmpdir/$pdf_base";
+        }
+    }
+    sleep(15);
+}
+echo "\n";
+
+
+echo "Stitching pages together\n";
 $workdir = getcwd();
 
 chdir($tmpdir);
@@ -57,14 +75,15 @@ chdir($workdir);
 
 system("rm -rf $tmpdir");
 
+echo "Launching PDF viewer\n";
 system("xdg-open Wanderatlas-$city.pdf");
 
 
 
 
-function get_city_pdf($osmid, $name)
+function request_city($osmid, $name)
 {
-    echo "rendering plan for: $name ...";
+    echo "Rendering overview plan for: $name\n";
     
     $data = ['paper_size' => 'Din A4',
              'title'      => "Wanderatlas $name",
@@ -88,16 +107,20 @@ function get_city_pdf($osmid, $name)
 
     $data = json_decode($response->getBody());
 
-    return wait_for_PDF($data->id);
+    return $data->id;
+}
+
+function get_city_pdf($osmid, $name)
+{
+    $id = request_city($osmid, $name);
+    return wait_for_PDF($id);
 }
 
 
 
 
-function get_route_pdf($route)
+function request_route($route)
 {
-    echo " rendering plan for route: ".$route['id']." ";
-    
     $data = ['paper_size' => 'Din A4',
              'track_url'  => $route['gpx_url']
             ];
@@ -118,7 +141,28 @@ function get_route_pdf($route)
 
     $data = json_decode($response->getBody());
 
-    return wait_for_PDF($data->id);
+    return $data->id;
+}
+
+function get_route_pdf($route)
+{
+    $id = request_route($route);
+    return wait_for_PDF($id);
+}
+
+function check_for_PDF($id)
+{
+    $job_url = "/jobs/" . $id;
+
+    list($status, $reply) = api_GET($job_url);
+
+    if ($status != 200 && $status != 202) {
+        echo "unexpected status: $status\n";
+        print_r($reply);
+        exit;
+    }
+
+    return ($status == 200) ? $reply->files->pdf : null;
 }
 
 function wait_for_PDF($id)
@@ -139,7 +183,7 @@ function wait_for_PDF($id)
         }
     }
     echo " done\n";
-    
+
     return $reply->files->pdf;
 }
 
